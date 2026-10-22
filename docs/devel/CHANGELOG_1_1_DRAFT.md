@@ -1190,6 +1190,10 @@ git log --no-merges --oneline 2ad32dc6e..main --not release/1.0
   marked busy until restart.
 - **AFC in toolchanger mode** draws its real toolheads (a Box Turtle as four heads, not one
   nozzle behind a hub).
+- **AFC heads with their own names lost their tool numbers** - a head named, say, `e2` showed
+  no tool number and its lanes were not tied to it when the printer's config file did not
+  describe it. When the printer reports the head's extruder in its status, that is now used
+  first; otherwise the config file is read as before.
 - **Reprint from Print History could crash** (#1815) - pressing Reprint on a job's details
   read the job's filename after the history list had already let go of it, which crashed
   some printers and silently picked the wrong text on others. It now keeps its own copy.

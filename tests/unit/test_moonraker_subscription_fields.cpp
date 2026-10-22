@@ -357,6 +357,7 @@ TEST_CASE("Subscription: AFC objects narrow per type", "[moonraker][subscription
     }
 
     SECTION("AFC_extruder: parse_afc_extruder fields") {
+        REQUIRE(has_field(subs, "AFC_extruder extruder", "extruder_name"));
         REQUIRE(has_field(subs, "AFC_extruder extruder", "lane_loaded"));
         REQUIRE(has_field(subs, "AFC_extruder extruder", "tool_end_status"));
         REQUIRE(has_field(subs, "AFC_extruder extruder", "tool_start_status"));
@@ -429,7 +430,7 @@ TEST_CASE("Subscription: AFC field lists are exactly the parsers' inputs",
           json::array({"state", "distance_to_fault", "error_sensitivity", "fault_detection_enabled",
                        "lanes"}));
     CHECK(subs["AFC_extruder extruder"] ==
-          json::array({"lane_loaded", "tool_end_status", "tool_start_status"}));
+          json::array({"extruder_name", "lane_loaded", "tool_end_status", "tool_start_status"}));
     CHECK(subs["AFC_BoxTurtle turtle1"] == json::array({"lanes", "extruders", "hubs", "buffers"}));
 }
 

@@ -107,6 +107,27 @@ std::unordered_map<std::string, std::string> u1_configfile_extruder_names() {
     };
 }
 
+/// The capture as a status that publishes each head's Klipper extruder as
+/// `AFC_extruder <section>.extruder_name`. AFC's own get_status() does not, so
+/// the capture has no such field; the values are the reporter's configfile ones.
+nlohmann::json with_status_extruder_names(nlohmann::json status) {
+    for (const auto& [section, klipper_name] : u1_configfile_extruder_names()) {
+        status["AFC_extruder " + section]["extruder_name"] = klipper_name;
+    }
+    return status;
+}
+
+/// Only the AFC_extruder objects of @p status, as a later delta carries them.
+nlohmann::json afc_extruder_objects(const nlohmann::json& status) {
+    nlohmann::json frame = nlohmann::json::object();
+    for (const auto& item : status.items()) {
+        if (item.key().rfind("AFC_extruder ", 0) == 0) {
+            frame[item.key()] = item.value();
+        }
+    }
+    return frame;
+}
+
 } // namespace
 
 namespace helix {
@@ -153,6 +174,21 @@ class AfcSharedExtruderHelper : public AmsBackendAfc {
         AfcTestAccess::extruder_klipper_names(*this) = std::move(names);
         AfcTestAccess::configfile_answered(*this) = true; // stands in for the query having landed
         AfcTestAccess::extruder_tool_index_warned(*this).clear();
+    }
+
+    int tool_for_section(const std::string& section) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return AfcTestAccess::tool_index_for_extruder_unlocked(*this, section);
+    }
+
+    int hub_tool_label_of(const std::string& unit_name) {
+        for (const auto& unit : get_system_info().units) {
+            if (unit.display_name == unit_name) {
+                return unit.hub_tool_label;
+            }
+        }
+        FAIL("no unit " << unit_name);
+        return -2;
     }
 };
 } // namespace helix
@@ -238,6 +274,123 @@ TEST_CASE("AFC shared extruders: configfile extruder_name gives toolheads E<n> i
     std::vector<int> numbers = labels.numbers;
     std::sort(numbers.begin(), numbers.end());
     CHECK(numbers == std::vector<int>{1, 2, 3, 4}); // 1-based extruder identity
+}
+
+// ============================================================================
+// The head's Klipper extruder from the AFC_extruder status itself
+// ============================================================================
+//
+// A status that publishes `extruder_name` needs no configfile section: a front
+// end whose heads are configured under another section name still gets every
+// head numbered. Configfile and the section name stay the fallbacks.
+
+TEST_CASE("AFC shared extruders: status extruder_name numbers heads with no configfile section",
+          "[ams][afc][toolchanger][topology][shared_extruder]") {
+    auto fixture = load_fixture("afc_u1_shared_extruders.json");
+    const auto status = with_status_extruder_names(fixture["status"]);
+
+    LogCapture log;
+    AfcSharedExtruderHelper afc;
+    afc.seed_extruder_klipper_names({}); // configfile answered, no AFC_extruder section in it
+    afc.discover_from(status);
+    afc.feed_until_settled(status);
+
+    CHECK(afc.tool_for_section("e0") == 0);
+    CHECK(afc.tool_for_section("e2") == 2);
+    CHECK(afc.tool_for_section("e3") == 3);
+
+    const AmsSystemInfo info = afc.get_system_info();
+    const auto layout = ams_draw::compute_system_tool_layout(info, &afc);
+    REQUIRE(layout.total_physical_tools == 4);
+    REQUIRE(ams_draw::layout_has_extruder_identity(layout));
+    std::set<std::string> resolved(layout.physical_to_extruder_name.begin(),
+                                   layout.physical_to_extruder_name.end());
+    CHECK(resolved == std::set<std::string>{"extruder", "extruder1", "extruder2", "extruder3"});
+    CHECK(ams_draw::compute_tool_badge_labels(layout, info, -1, -1).prefix == 'E');
+
+    INFO("a head the status numbers is not a config missing extruder_name");
+    CHECK(log.count_containing("Cannot determine a tool number") == 0);
+}
+
+TEST_CASE("AFC shared extruders: status and configfile agreeing resolve as configfile alone",
+          "[ams][afc][toolchanger][topology][shared_extruder]") {
+    auto fixture = load_fixture("afc_u1_shared_extruders.json");
+    const auto& plain = fixture["status"];
+    const auto named = with_status_extruder_names(plain);
+
+    AfcSharedExtruderHelper configfile_only;
+    configfile_only.seed_extruder_klipper_names(u1_configfile_extruder_names());
+    configfile_only.discover_from(plain);
+    configfile_only.feed_until_settled(plain);
+
+    AfcSharedExtruderHelper both;
+    both.seed_extruder_klipper_names(u1_configfile_extruder_names());
+    both.discover_from(named);
+    both.feed_until_settled(named);
+
+    for (const auto* section : {"e0", "e1", "e2", "e3"}) {
+        CAPTURE(section);
+        CHECK(both.tool_for_section(section) == configfile_only.tool_for_section(section));
+    }
+
+    const AmsSystemInfo info_a = configfile_only.get_system_info();
+    const AmsSystemInfo info_b = both.get_system_info();
+    const auto layout_a = ams_draw::compute_system_tool_layout(info_a, &configfile_only);
+    const auto layout_b = ams_draw::compute_system_tool_layout(info_b, &both);
+    CHECK(layout_b.total_physical_tools == layout_a.total_physical_tools);
+    CHECK(layout_b.physical_to_extruder_name == layout_a.physical_to_extruder_name);
+    const auto labels_a = ams_draw::compute_tool_badge_labels(layout_a, info_a, -1, -1);
+    const auto labels_b = ams_draw::compute_tool_badge_labels(layout_b, info_b, -1, -1);
+    CHECK(labels_b.prefix == labels_a.prefix);
+    CHECK(labels_b.numbers == labels_a.numbers);
+}
+
+TEST_CASE("AFC shared extruders: neither status nor configfile names a head, section name stays",
+          "[ams][afc][toolchanger][topology][shared_extruder]") {
+    auto fixture = load_fixture("afc_u1_shared_extruders.json");
+    const auto& status = fixture["status"]; // AFC's own status: no extruder_name
+
+    AfcSharedExtruderHelper afc;
+    afc.seed_extruder_klipper_names({});
+    afc.discover_from(status);
+    afc.feed_until_settled(status);
+
+    CHECK(afc.tool_for_section("e0") == -1);
+    CHECK(afc.tool_for_section("e2") == -1);
+    CHECK(afc.hub_tool_label_of("Turtle_1") == -1);
+
+    const AmsSystemInfo info = afc.get_system_info();
+    const auto layout = ams_draw::compute_system_tool_layout(info, &afc);
+    CHECK(layout.total_physical_tools == 4);
+    CHECK_FALSE(ams_draw::layout_has_extruder_identity(layout));
+    CHECK(ams_draw::compute_tool_badge_labels(layout, info, -1, -1).prefix == 'T');
+}
+
+TEST_CASE("AFC shared extruders: a status extruder_name after the lanes moves them to the head",
+          "[ams][afc][toolchanger][topology][shared_extruder]") {
+    // Lanes are parsed ahead of AFC_extruder in every frame, so the lanes and
+    // units have already resolved their heads by the section name by the time
+    // the name arrives. Here it arrives in a later delta of its own.
+    auto fixture = load_fixture("afc_u1_shared_extruders.json");
+    const auto& status = fixture["status"];
+
+    AfcSharedExtruderHelper afc;
+    afc.seed_extruder_klipper_names({});
+    afc.discover_from(status);
+    afc.feed_until_settled(status);
+    REQUIRE(afc.hub_tool_label_of("Vivid_1") == -1);
+
+    afc.feed(afc_extruder_objects(with_status_extruder_names(status)));
+
+    CHECK(afc.hub_tool_label_of("Turtle_1") == 0);
+    CHECK(afc.hub_tool_label_of("Vivid_1") == 3);
+
+    const AmsSystemInfo info = afc.get_system_info();
+    const auto layout = ams_draw::compute_system_tool_layout(info, &afc);
+    REQUIRE(ams_draw::layout_has_extruder_identity(layout));
+    std::set<std::string> resolved(layout.physical_to_extruder_name.begin(),
+                                   layout.physical_to_extruder_name.end());
+    CHECK(resolved == std::set<std::string>{"extruder", "extruder1", "extruder2", "extruder3"});
 }
 
 // ============================================================================

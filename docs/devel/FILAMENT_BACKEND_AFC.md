@@ -174,6 +174,25 @@ AFC state comes from multiple Klipper objects:
 | `tool_start_status` | bool | Toolhead entry sensor |
 | `tool_end_status` | bool | Toolhead exit/nozzle sensor |
 | `lane_loaded` | string | Currently loaded lane name |
+| `extruder_name` | string | Optional. The head's Klipper extruder (`extruder`, `extruder<N>`). AFC's own `get_status()` does not publish it; a status that does is read first (below) |
+
+**Which Klipper extruder a head is.** The `<name>` in `AFC_extruder <name>` is the config
+section name, which AFC lets be anything: `[AFC_extruder e2]` with `extruder_name: extruder2`
+is a valid head. AFC numbers its tools from that `extruder_name` (`th_extruder_name`), so every
+place that turns a head into a tool number or an `E<n>` badge goes through one resolver,
+`src/printer/ams_backend_afc.cpp#klipper_extruder_name_unlocked`, which takes the first of these
+that names an extruder:
+
+1. `extruder_name` from the head's own `AFC_extruder` status frame, recorded by
+   `src/printer/ams_backend_afc.cpp#parse_afc_extruder`.
+2. `extruder_name` from `configfile.settings["afc_extruder <name>"]`, read once at start by
+   `src/printer/ams_backend_afc.cpp#query_afc_configfile_topology`.
+3. The section name itself, which is right on the common `[AFC_extruder extruder1]` shape.
+
+A stock AFC never publishes the first, so it resolves through configfile exactly as before.
+Lanes are parsed ahead of `AFC_extruder` in each frame; when a status name changes a head's
+resolution, `parse_afc_extruder` moves the lanes that named the head under its old name and
+redoes the unit tool labels.
 
 **Global state** (`AFC`):
 

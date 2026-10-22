@@ -42,6 +42,7 @@
     "lanes"
   ],
   "AFC_extruder extruder": [
+    "extruder_name",
     "lane_loaded",
     "tool_end_status",
     "tool_start_status"

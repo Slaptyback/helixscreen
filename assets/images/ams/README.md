@@ -26,4 +26,5 @@ done
 | quattro_box | Quattro Box |
 | btt_vivid | BTT ViViD |
 | kms | KMS |
+| rosetta | Rosetta / BMCU, full color. `rosetta.svg` is the Rosetta project's own mark (`docs/images/rosetta-mark.svg` of mmuhub); `rosetta_64.png` is an ImageMagick `-density 600 -resize 64x64` render |
 | openams | OpenAMS, full color (MIT, Copyright (c) 2025 OpenAMS; notice in [LICENSE-openams.md](LICENSE-openams.md)). `openams.svg` is `tools/docs/logo/out/openams-logo.svg` of the OpenAMS project (the light set, which also reads on dark backgrounds); `openams_64.png` is its `rsvg-convert -w 64 -h 64` render |

@@ -355,9 +355,10 @@ void AmsBackendAfc::on_started() {
     // just errors, and the probe is silent.
     query_lane_data();
 
-    // AFC indexes toolheads by th_extruder_name, which no get_status() carries.
-    // configfile.settings is the only published source, so fetch it once here;
-    // parse_afc_extruder() falls back to the section name until it lands.
+    // AFC indexes toolheads by th_extruder_name, which AFC_extruder's get_status()
+    // does not carry. configfile.settings publishes it, so fetch it once here;
+    // a status frame that carries `extruder_name` is preferred over it, and
+    // parse_afc_extruder() falls back to the section name until either lands.
     query_afc_configfile_topology();
 
     // Note: With the early hardware discovery callback architecture, this backend is
@@ -420,8 +421,11 @@ nlohmann::json AmsBackendAfc::required_status_objects(const std::vector<std::str
     static const json hub_fields = json::array({"state", "afc_bowden_length"});
     static const json buffer_fields = json::array(
         {"state", "distance_to_fault", "error_sensitivity", "fault_detection_enabled", "lanes"});
+    // "extruder_name" is the head's Klipper extruder. AFC's own get_status()
+    // does not publish it, and Moonraker omits what an object does not have,
+    // so asking for it is safe against every version.
     static const json extruder_fields =
-        json::array({"lane_loaded", "tool_end_status", "tool_start_status"});
+        json::array({"extruder_name", "lane_loaded", "tool_end_status", "tool_start_status"});
     // Unit-level objects (AFC_BoxTurtle, AFC_OpenAMS, AFC_vivid, ...) are read
     // for their topology arrays only.
     static const json unit_fields = json::array({"lanes", "extruders", "hubs", "buffers"});
@@ -3489,6 +3493,29 @@ void AmsBackendAfc::parse_afc_extruder(const std::string& ext_name, const nlohma
     // lane_loaded must not silently clear the sensors.
     AfcExtruderSensors& sensors = extruder_sensors_[ext_name];
 
+    // The head's Klipper extruder, when the status publishes it. Read before
+    // lane_loaded below, which numbers this head through it.
+    if (data.contains("extruder_name") && data["extruder_name"].is_string()) {
+        const std::string before = klipper_extruder_name_unlocked(ext_name);
+        extruder_status_names_[helix::text_io::to_lower(ext_name)] =
+            data["extruder_name"].get<std::string>();
+        const std::string after = klipper_extruder_name_unlocked(ext_name);
+        if (after != before) {
+            // Lanes are parsed ahead of AFC_extruder, so any that named this
+            // head resolved it without this name. Move them over, and redo the
+            // unit labels if the units were already mapped.
+            for (int i = 0; i < slots_.slot_count(); ++i) {
+                auto* entry = slots_.get_mut(i);
+                if (entry && entry->info.extruder_name == before) {
+                    entry->info.extruder_name = after;
+                }
+            }
+            if (!unit_lane_map_.empty()) {
+                rebuild_unit_map_from_klipper();
+            }
+        }
+    }
+
     if (data.contains("tool_start_status") && data["tool_start_status"].is_boolean()) {
         tool_start_sensor_ = data["tool_start_status"].get<bool>();
         sensors.tool_start = tool_start_sensor_;
@@ -4296,15 +4323,19 @@ void AmsBackendAfc::query_afc_configfile_topology() {
 }
 
 std::string AmsBackendAfc::klipper_extruder_name_unlocked(const std::string& section_name) const {
-    // configfile-sourced th_extruder_name is authoritative — it is what AFC
-    // itself indexes on, and the section name is free to be anything. Taken
-    // only when it actually names an extruder: AFC accepts any value
-    // containing "extruder" (AFC_extruder.py:384), so a config can carry one
-    // that no numbering can read, and the section name is the better guess
-    // then. Checking here rather than at each caller keeps one fallback chain.
-    const auto it = extruder_klipper_names_.find(helix::text_io::to_lower(section_name));
-    if (it != extruder_klipper_names_.end() && helix::tool_number_for_extruder(it->second)) {
-        return it->second;
+    // th_extruder_name is authoritative — it is what AFC itself indexes on,
+    // and the section name is free to be anything. The status's own
+    // `extruder_name` is read first, then configfile's. Each is taken only
+    // when it actually names an extruder: AFC accepts any value containing
+    // "extruder" (AFC_extruder.py:384), so a config can carry one that no
+    // numbering can read, and the next source is the better guess then.
+    // Checking here rather than at each caller keeps one fallback chain.
+    const std::string key = helix::text_io::to_lower(section_name);
+    for (const auto* names : {&extruder_status_names_, &extruder_klipper_names_}) {
+        const auto it = names->find(key);
+        if (it != names->end() && helix::tool_number_for_extruder(it->second)) {
+            return it->second;
+        }
     }
     // Fall back to the section name. `[AFC_extruder extruder1]` is what AFC's
     // own docs show and what every published config uses, and on v1.1.0 (no

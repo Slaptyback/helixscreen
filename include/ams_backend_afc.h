@@ -848,7 +848,9 @@ class AmsBackendAfc : public AmsSubscriptionBackend {
      *  - the AFC_extruder section -> Klipper extruder name map. AFC derives a
      *    toolhead's tool index from `th_extruder_name` (AFC_extruder.py:222-223
      *    = `config.get("extruder_name", <section name>)`, consumed at
-     *    AFC_Toolchanger.py:231-232, both v1.2.0).
+     *    AFC_Toolchanger.py:231-232, both v1.2.0), which AFC_extruder's
+     *    get_status() does not publish. A status that does publish it as
+     *    `extruder_name` is read by parse_afc_extruder() and wins over this.
      *
      * Costs one query of the whole resolved config at startup; the same query
      * the bed-mesh and screws-tilt panels already make on demand.
@@ -864,7 +866,8 @@ class AmsBackendAfc : public AmsSubscriptionBackend {
      * consumed at AFC_Toolchanger.py:231-232), so this is the only correct
      * bridge from what AFC's status frames name to what Klipper names.
      *
-     * Returns @p section_name unchanged when configfile has not answered, which
+     * Reads the AFC_extruder status's `extruder_name` first, then configfile.
+     * Returns @p section_name unchanged when neither names an extruder, which
      * is right for every standard install and the best available guess for the
      * rest. This is the single point where that substitution happens; nothing
      * outside it should be parsing an AFC-sourced extruder string.
@@ -1484,6 +1487,12 @@ class AmsBackendAfc : public AmsSubscriptionBackend {
     /// until query_afc_configfile_topology() answers, and stays empty on a
     /// printer whose config Moonraker will not serve.
     std::unordered_map<std::string, std::string> extruder_klipper_names_;
+
+    /// AFC_extruder SECTION name (lowercased) -> Klipper extruder name, read from
+    /// the optional `extruder_name` field of an AFC_extruder status frame.
+    /// Preferred over extruder_klipper_names_; empty when the status does not
+    /// carry the field.
+    std::unordered_map<std::string, std::string> extruder_status_names_;
 
     /// True once configfile.settings has actually been read, whatever it held.
     /// Distinguishes "this section has no extruder_name" from "we have not

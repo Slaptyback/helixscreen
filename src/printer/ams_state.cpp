@@ -169,9 +169,8 @@ LogoArt AmsState::get_logo(const std::string& type_name) {
         {"bttvivid", {asset_component_uri("assets/images/ams/btt_vivid_64.png"), false}},
         {"vivid", {asset_component_uri("assets/images/ams/btt_vivid_64.png"), false}},
         {"kms", {asset_component_uri("assets/images/ams/kms_64.png"), false}},
-        // Rosetta's BMCU unit: the Rosetta mark, full color, drawn untinted. Keyed on the
-        // unit type AFC publishes ("BMCU BMCU_1") and on Rosetta's own type name.
-        {"bmcu", {asset_component_uri("assets/images/ams/rosetta_64.png"), true}},
+        // Rosetta's units, which its printer plugin publishes as "rosetta <name>", whatever
+        // the hardware: the Rosetta mark, full color, drawn untinted.
         {"rosetta", {asset_component_uri("assets/images/ams/rosetta_64.png"), true}},
         // OpenAMS: a full-color mark, drawn untinted.
         {"open ams", {asset_component_uri("assets/images/ams/openams_64.png"), true}},

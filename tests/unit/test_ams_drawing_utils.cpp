@@ -534,8 +534,9 @@ TEST_CASE("AmsState::get_logo: only full-color art skips the text-color tint", "
     CHECK_FALSE(helix::AmsState::get_logo("Nonexistent Thing").color);
 }
 
-TEST_CASE("AmsState::get_logo: a BMCU unit draws the Rosetta mark, full color", "[ams][logo]") {
-    for (const char* name : {"bmcu", "BMCU BMCU_1", "rosetta BMCU_1", "Rosetta Rosetta_Vivid_1"}) {
+TEST_CASE("AmsState::get_logo: a unit Rosetta publishes draws the Rosetta mark, full color",
+          "[ams][logo]") {
+    for (const char* name : {"rosetta BMCU_1", "rosetta ACE_1"}) {
         INFO(name);
         const auto art = helix::AmsState::get_logo(name);
         REQUIRE(art.path != nullptr);

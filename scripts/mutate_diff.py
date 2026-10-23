@@ -1181,6 +1181,7 @@ class JobBudget:
     def __init__(self):
         self.pass_fds = ()
         self._rfd = self._wfd = None
+        self._shared_reader = False
         self._own = threading.Semaphore(1)
         self._held = []
         # Reentrant: a stop handler gives tokens back from the main thread,
@@ -1218,19 +1219,30 @@ class JobBudget:
             return
         self.pass_fds = (r, w)
         self._wfd = w
-        # A descriptor of our own, so non-blocking reads leave the one make
-        # shares untouched.
+        self._rfd = self._own_reader(r)
+
+    def _own_reader(self, r):
+        """A descriptor to read the pipe `r` without blocking, or None.
+
+        Linux reopens the pipe through /proc as a descriptor of our own, so
+        O_NONBLOCK leaves the one make shares untouched. Elsewhere the reopen
+        would share make's open file description (macOS /dev/fd is a dup), so
+        the shared `r` itself is read, and try_token asks select() first.
+        """
+        self._shared_reader = False
         try:
-            self._rfd = os.open(f'/proc/self/fd/{r}', os.O_RDONLY | os.O_NONBLOCK)
+            return os.open(f'/proc/self/fd/{r}', os.O_RDONLY | os.O_NONBLOCK)
         except OSError:
-            self._rfd = None
+            if sys.platform == 'linux':
+                return None
+        self._shared_reader = True
+        return r
 
     def make_private(self, slots, env):
         """A jobserver of `slots` slots for this run alone; False if impossible."""
         r, w = os.pipe()
-        try:
-            rfd = os.open(f'/proc/self/fd/{r}', os.O_RDONLY | os.O_NONBLOCK)
-        except OSError:
+        rfd = self._own_reader(r)
+        if rfd is None:
             os.close(r)
             os.close(w)
             return False
@@ -1245,6 +1257,8 @@ class JobBudget:
         if not self.pooled:
             return UNPOOLED
         try:
+            if self._shared_reader and not select.select([self._rfd], [], [], 0)[0]:
+                return None
             b = os.read(self._rfd, 1)
         except OSError:
             return None
@@ -2383,7 +2397,7 @@ def plan_workers(root, args):
     try:
         probe_dir.mkdir(parents=True, exist_ok=True)
         probe = probe_dir / f'.{root.name}.mutate-reflink-probe'
-        r = subprocess.run(['cp', f'--reflink={copy_mode()}', str(root / '.git' / 'HEAD'),
+        r = subprocess.run(['cp', *clone_flags(), str(root / '.git' / 'HEAD'),
                             str(probe)], capture_output=True, text=True)
         probe.unlink(missing_ok=True)
     except OSError as e:
@@ -2398,6 +2412,14 @@ def copy_mode():
     # The tests' tmp directories rarely reflink; a fixture tree is small enough
     # to copy outright.
     return 'auto' if os.environ.get('MUTATE_DIFF_PLAIN_COPY') == '1' else 'always'
+
+
+def clone_flags():
+    """cp flags for a copy-on-write copy: GNU --reflink, or -c (clonefile) on macOS."""
+    mode = copy_mode()
+    if sys.platform == 'darwin':
+        return ['-c'] if mode == 'always' else []
+    return [f'--reflink={mode}']
 
 
 def worker_parent(root, args):
@@ -2419,10 +2441,10 @@ def _copy_tree(src, dst):
         shutil.rmtree(dst)
     dst.mkdir(parents=True)
     (dst / WORKER_MARK).write_text(f'{src}\n')
-    mode = f'--reflink={copy_mode()}'
+    mode = clone_flags()
     top = sorted(e for e in os.listdir(src) if e not in WORKER_SKIP_TOP)
     if top:
-        r = subprocess.run(['cp', '-a', mode, *[str(src / e) for e in top], str(dst)],
+        r = subprocess.run(['cp', '-a', *mode, *[str(src / e) for e in top], str(dst)],
                            capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError(f'copying {src} to {dst}: {r.stderr.strip()}')
@@ -2430,7 +2452,7 @@ def _copy_tree(src, dst):
         (dst / 'build').mkdir()
         inner = sorted(e for e in os.listdir(src / 'build') if not WORKER_SKIP_BUILD.match(e))
         if inner:
-            r = subprocess.run(['cp', '-a', mode, *[str(src / 'build' / e) for e in inner],
+            r = subprocess.run(['cp', '-a', *mode, *[str(src / 'build' / e) for e in inner],
                                 str(dst / 'build')], capture_output=True, text=True)
             if r.returncode != 0:
                 raise RuntimeError(f'copying {src}/build to {dst}: {r.stderr.strip()}')

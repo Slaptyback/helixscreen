@@ -245,7 +245,10 @@ def _alive(pid: int) -> bool:
     try:
         return Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z"
     except OSError:
-        return False
+        pass
+    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    state = ps.stdout.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 # ---------------------------------------------------------------------------
@@ -603,10 +606,11 @@ def test_not_covered_paths_ride_along_with_the_proof(tmp_path):
 
 
 def test_a_tracked_child_does_not_start_with_stop_signals_blocked(tmp_path):
-    rc, out = md.run_tracked(["grep", "^SigBlk", "/proc/self/status"], str(tmp_path))
-    mask = int(out.split()[1], 16)
+    probe = "import signal; print(sorted(signal.pthread_sigmask(signal.SIG_BLOCK, [])))"
+    rc, out = md.run_tracked([sys.executable, "-c", probe], str(tmp_path))
+    blocked = {int(n) for n in out.strip().strip("[]").split(",") if n.strip()}
     for sig in md.STOP_SIGNALS:
-        assert not mask & (1 << (sig - 1)), out
+        assert int(sig) not in blocked, out
 
 
 # ---------------------------------------------------------------------------
@@ -660,9 +664,8 @@ def test_a_child_is_handed_the_jobserver_descriptors(monkeypatch, tmp_path):
     budget.join_inherited(env)
     monkeypatch.setattr(md, 'JOBS', budget)
     try:
-        rc, out = md.run_tracked(['sh', '-c', f'[ -e /proc/self/fd/{r} ] && '
-                                              f'[ -e /proc/self/fd/{w} ] && echo open'],
-                                 str(tmp_path))
+        probe = (f'import os; os.fstat({r}); os.fstat({w}); print("open")')
+        rc, out = md.run_tracked([sys.executable, '-c', probe], str(tmp_path))
         assert out.strip() == 'open', 'a make started here would build at -j1'
     finally:
         os.close(r)
@@ -977,7 +980,8 @@ def test_max_minutes_in_a_parallel_run_names_every_hunk_it_did_not_finish(tmp_pa
 def test_without_reflink_a_parallel_request_runs_serial_and_says_why(tmp_path):
     probe = tmp_path / "probe"
     probe.write_text("x")
-    if subprocess.run(["cp", "--reflink=always", str(probe), str(tmp_path / "probe2")],
+    clone = ["-c"] if sys.platform == "darwin" else ["--reflink=always"]
+    if subprocess.run(["cp", *clone, str(probe), str(tmp_path / "probe2")],
                       capture_output=True).returncode == 0:
         pytest.skip("this filesystem takes reflink copies")
     work, base, seen = _parallel_fixture(tmp_path)

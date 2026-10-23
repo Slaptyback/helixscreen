@@ -742,6 +742,9 @@ def test_a_hung_shard_is_measured_against_its_own_baseline(tmp_path):
 def test_the_baseline_records_each_shard_and_orders_the_next_run(tmp_path):
     exe = _shard_bin(tmp_path, 'sleep "0.$((i * 3))"\n'
                                'echo "All tests passed (1 assertion in 1 test case)"\n')
+    # macOS scans a new executable on its first launch (0.1-0.4 s), which would
+    # make the first shard measure slower than the shard that sleeps 0.3 s.
+    subprocess.run([str(exe)], capture_output=True, check=True)
     plan = md.Catch2Plan(3, 1)
     state, _, _ = md.run_catch2(tmp_path, exe, '[x]', plan, open(os.devnull, 'w'))
     assert state == md.GREEN
